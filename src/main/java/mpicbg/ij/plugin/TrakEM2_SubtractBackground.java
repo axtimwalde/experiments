@@ -143,17 +143,17 @@ public class TrakEM2_SubtractBackground implements PlugIn
 		new ImagePlus( "stack", stack ).show();
 
 		final ImagePlusImg< FloatType, ? > img = ImagePlusImgs.from( new ImagePlus( "", stack ) );
-		final float[][] vs = new float[ ( int )img.dimension( 2 ) ][ 1 ];
+		final double[][] vs = new double[ ( int )img.dimension( 2 ) ][ 1 ];
 		final ArrayList< Point  > points = new ArrayList< Point >( ( int )img.dimension( 2 ) );
 		final ArrayList< PointMatch > matches = new ArrayList< PointMatch >( ( int )img.dimension( 2 ) );
 		final ArrayList< PointMatch > inliers = new ArrayList< PointMatch >();
 
 		for ( int i = 0; i < img.dimension( 2 ); ++i )
 		{
-			vs[ i ] = new float[]{ 0 };
+			vs[ i ] = new double[]{ 0 };
 			final Point p = new Point( vs[ i ] );
 			points.add( p );
-			matches.add( new PointMatch( p, new Point( new float[]{ 0 } ) ) );
+			matches.add( new PointMatch( p, new Point( new double[]{ 0 } ) ) );
 		}
 
 		final FloatProcessor bg = new FloatProcessor( ( int )img.dimension( 0 ), ( int )img.dimension( 1 ) );
@@ -182,8 +182,8 @@ public class TrakEM2_SubtractBackground implements PlugIn
 					//t.fit( matches );
 					if ( modelFound )
 					{
-						final float tf = t.getTranslation();
-						bg.setf( access.getIntPosition( 0 ), access.getIntPosition( 1 ), tf );
+						final double tf = t.getTranslation();
+						bg.setf( access.getIntPosition( 0 ), access.getIntPosition( 1 ), ( float )tf );
 					}
 				}
 				catch ( final NotEnoughDataPointsException e )

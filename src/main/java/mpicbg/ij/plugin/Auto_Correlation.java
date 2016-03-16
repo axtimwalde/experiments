@@ -9,19 +9,17 @@ import net.imglib2.FinalInterval;
 import net.imglib2.IterableInterval;
 import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.algorithm.fft.FourierTransform;
-import net.imglib2.algorithm.fft.FourierTransform.Rearrangement;
-import net.imglib2.algorithm.fft.InverseFourierTransform;
+import net.imglib2.algorithm.fft2.FFT;
 import net.imglib2.exception.ImgLibException;
 import net.imglib2.exception.IncompatibleTypeException;
 import net.imglib2.img.ImagePlusAdapter;
 import net.imglib2.img.Img;
 import net.imglib2.img.ImgFactory;
+import net.imglib2.img.array.ArrayImgFactory;
 import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.img.imageplus.FloatImagePlus;
 import net.imglib2.img.imageplus.ImagePlusImg;
 import net.imglib2.img.imageplus.ImagePlusImgFactory;
-import net.imglib2.outofbounds.OutOfBoundsConstantValueFactory;
 import net.imglib2.type.NativeType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.complex.ComplexFloatType;
@@ -135,18 +133,10 @@ public class Auto_Correlation implements PlugIn
 	public < T extends RealType< T > & NativeType< T > > ImagePlus process( final ImagePlusImg< T, ? > img )
 			throws IncompatibleTypeException
 	{
-		normalize( img, new ImagePlusImgFactory< FloatType >() );
+//		@SuppressWarnings( "unchecked" )
+//		final ImagePlusImg< FloatType, FloatArray > imgNormalized = ( ImagePlusImg< FloatType, FloatArray >)normalize( img, new ImagePlusImgFactory< FloatType >() );
 
-		final T firstElement = img.firstElement();
-
-		final FourierTransform< T, ComplexFloatType > fft =
-				new FourierTransform< T, ComplexFloatType >(
-						img,
-						new ComplexFloatType(),
-						new OutOfBoundsConstantValueFactory< T, RandomAccessibleInterval< T > >( firstElement.createVariable() ) );
-		fft.setRearrangement( Rearrangement.UNCHANGED );
-		fft.process();
-		final Img< ComplexFloatType > fftImg = fft.getResult();
+		final Img< ComplexFloatType > fftImg = FFT.realToComplex( img, new ArrayImgFactory< ComplexFloatType >() );
 
 		final ComplexFloatType c = new ComplexFloatType();
 		for ( final ComplexFloatType t : fftImg )
@@ -156,13 +146,9 @@ public class Auto_Correlation implements PlugIn
 			t.mul( c );
 		}
 
-		final InverseFourierTransform< FloatType, ComplexFloatType > ifft =
-				new InverseFourierTransform< FloatType, ComplexFloatType >(
-						fftImg, new ImagePlusImgFactory< FloatType >(), fft, new FloatType() );
-		ifft.process();
 		try
 		{
-			final FloatImagePlus< FloatType > img2 = ( FloatImagePlus< FloatType > )ifft.getResult();
+			final FloatImagePlus< FloatType > img2 = ( FloatImagePlus< FloatType > )FFT.complexToReal( fftImg, new ImagePlusImgFactory< FloatType >(), new FloatType() );
 			final FloatImagePlus< FloatType > fimg2 = ( FloatImagePlus< FloatType > )normalize( img2, new ImagePlusImgFactory< FloatType >() );
 			final double[] minMax = minMax( fimg2 );
 			final ImagePlus imp = fimg2.getImagePlus();

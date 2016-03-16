@@ -39,9 +39,9 @@ import mpicbg.util.ColorStream;
 import mpicbg.util.Timer;
 import net.imglib2.Cursor;
 import net.imglib2.IterableInterval;
+import net.imglib2.KDTree;
 import net.imglib2.RealPoint;
-import net.imglib2.collection.KDTree;
-import net.imglib2.collection.RealPointSampleList;
+import net.imglib2.RealPointSampleList;
 import net.imglib2.img.array.ArrayImgs;
 import net.imglib2.neighborsearch.NearestNeighborSearch;
 import net.imglib2.neighborsearch.NearestNeighborSearchOnKDTree;
@@ -403,13 +403,13 @@ public class SIFT_ExtractMultiplePointRois implements PlugIn
 
 					for ( final PointMatch m : inliers )
 					{
-						final float[] m_p1 = m.getP1().getL();
-						final float[] m_p2 = m.getP2().getL();
+						final double[] m_p1 = m.getP1().getL();
+						final double[] m_p2 = m.getP2().getL();
 
-						x1[ i ] = m_p1[ 0 ];
-						y1[ i ] = m_p1[ 1 ];
-						x2[ i ] = m_p2[ 0 ];
-						y2[ i ] = m_p2[ 1 ];
+						x1[ i ] = ( float )m_p1[ 0 ];
+						y1[ i ] = ( float )m_p1[ 1 ];
+						x2[ i ] = ( float )m_p2[ 0 ];
+						y2[ i ] = ( float )m_p2[ 1 ];
 
 						++i;
 					}

@@ -17,30 +17,32 @@
 package mpicbg.models;
 
 /**
- * 
+ *
  *
  * @author Stephan Saalfeld <saalfeld@mpi-cbg.de>
  */
 public class GaussianMovingLeastSquaresTransform2 extends MovingLeastSquaresTransform2
 {
-	protected double gaussianWeigh( final double d2, final double var2 )
+    private static final long serialVersionUID = 2611979052865264302L;
+
+    protected double gaussianWeigh( final double d2, final double var2 )
 	{
 		return Math.exp( -d2 / var2 );
 	}
-	
+
 	/** Temporary.  Actually weigh should be overridden which is final in the current mpicbg master... */
 	@Override
-	public void applyInPlace( final float[] location )
+	public void applyInPlace( final double[] location )
 	{
 		final double var2 = 2 * alpha * alpha;
 		final float[] ww = new float[ w.length ];
-		
+
 		for ( int i = 0; i < w.length; ++i )
-		{	
+		{
 			float s = 0;
 			for ( int d = 0; d < location.length; ++d )
 			{
-				final float dx = p[ d ][ i ] - location[ d ];
+				final double dx = p[ d ][ i ] - location[ d ];
 				s += dx * dx;
 			}
 			if ( s <= 0 )
@@ -51,8 +53,8 @@ public class GaussianMovingLeastSquaresTransform2 extends MovingLeastSquaresTran
 			}
 			ww[ i ] = w[ i ] * ( float )gaussianWeigh( s, var2 );
 		}
-		
-		try 
+
+		try
 		{
 			model.fit( p, q, ww );
 			model.applyInPlace( location );

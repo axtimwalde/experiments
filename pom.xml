@@ -8,13 +8,17 @@
 	<parent>
 		<groupId>sc.fiji</groupId>
 		<artifactId>pom-fiji</artifactId>
-		<version>2.0.0-SNAPSHOT</version>
+		<version>20.0.0</version>
 	</parent>
 
 	<artifactId>saalfeld_experiments</artifactId>
 
 	<name>plugins/saalfeld_experiments.jar</name>
 	<description></description>
+	
+	<properties>
+		<enforcer.skip>true</enforcer.skip>
+	</properties>
 
 	<dependencies>
 		<dependency>
@@ -32,25 +36,23 @@
 		<dependency>
 			<groupId>mpicbg</groupId>
 			<artifactId>mpicbg</artifactId>
-			<version>0.6.2-SNAPSHOT</version>
 		</dependency>
 		<dependency>
 			<groupId>mpicbg</groupId>
 			<artifactId>mpicbg_</artifactId>
-			<version>0.6.2-SNAPSHOT</version>
 		</dependency>
 		<dependency>
 			<groupId>net.imglib2</groupId>
 			<artifactId>imglib2-realtransform</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>net.imglib2</groupId>
-			<artifactId>imglib2-algorithms-gpl</artifactId>
-		</dependency>
-		<dependency>
 			<groupId>sc.fiji</groupId>
 			<artifactId>TrakEM2_</artifactId>
-			<version>1.0b-SNAPSHOT</version>
+			<version>1.0h-SNAPSHOT</version>
+		</dependency>
+		<dependency>
+			<groupId>net.imglib2</groupId>
+			<artifactId>imglib2-algorithm-fft</artifactId>
 		</dependency>
 	</dependencies>
 	
