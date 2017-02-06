@@ -8,7 +8,7 @@
 	<parent>
 		<groupId>sc.fiji</groupId>
 		<artifactId>pom-fiji</artifactId>
-		<version>20.0.0</version>
+		<version>27.0.0</version>
 	</parent>
 
 	<artifactId>saalfeld_experiments</artifactId>
@@ -48,7 +48,6 @@
 		<dependency>
 			<groupId>sc.fiji</groupId>
 			<artifactId>TrakEM2_</artifactId>
-			<version>1.0h-SNAPSHOT</version>
 		</dependency>
 		<dependency>
 			<groupId>net.imglib2</groupId>
