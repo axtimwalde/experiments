@@ -951,7 +951,8 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 //		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/saalfeldlab/scheffer/26-27/26.3008-27.128.2.tif" );
 //		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/saalfeldlab/scheffer/26-27/26.3008-27.128.2.affine.tif" );
 //		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/saalfeldlab/scheffer/26-27-2017-03-1.crop.tif" );
-		final ImagePlus imp = new Opener().openImage( "/home/saalfelds/tmp/dagmar/26-27-affine.tif" );
+//		final ImagePlus imp = new Opener().openImage( "/home/saalfelds/tmp/dagmar/26-27-affine.tif" );
+		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/home/saalfelds/tmp/dagmar/26-03173.27-00303.rigid.tif" );
 		imp.show();
 		new PMCCScaleSpaceBlockFlow().run("");
 		new ImagePlus(
