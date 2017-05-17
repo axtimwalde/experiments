@@ -148,8 +148,6 @@ public class ApplyFlow
 			final ArrayImg< DoubleType, ? > yPositions,
 			final int width,
 			final int height,
-			final String xPath,
-			final String yPath,
 			final AffineTransform2D affine,
 			final double lambda ) throws IOException
 	{
@@ -213,8 +211,6 @@ public class ApplyFlow
 					yPositions,
 					width,
 					height,
-					xPath,
-					yPath,
 					rigid.inverse(),
 					lambda );
 
