@@ -21,6 +21,8 @@ import ij.gui.GenericDialog;
 import ij.io.Opener;
 import ij.plugin.PlugIn;
 import ij.plugin.filter.GaussianBlur;
+import ij.process.Blitter;
+import ij.process.ByteProcessor;
 import ij.process.ColorProcessor;
 import ij.process.FloatProcessor;
 import ij.process.ImageProcessor;
@@ -59,6 +61,8 @@ import net.imglib2.type.numeric.integer.IntType;
 import net.imglib2.type.numeric.integer.LongType;
 import net.imglib2.type.numeric.real.DoubleType;
 import net.imglib2.type.numeric.real.FloatType;
+import net.imglib2.util.Pair;
+import net.imglib2.util.ValuePair;
 import net.imglib2.view.Views;
 
 /**
@@ -292,7 +296,7 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 				// continue if radius is larger than maxDistance
 				if ( yo * yo + xo * xo > distance * distance ) continue;
 
-				IJ.log( String.format( "(%d, %d)", xo, yo ) );
+//				IJ.log( String.format( "(%d, %d)", xo, yo ) );
 
 				bc.setOffset( xo, yo );
 
@@ -411,7 +415,7 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 			final ImageStack shiftVectors,
 			final FloatProcessor shiftX,
 			final FloatProcessor shiftY,
-			final ShortProcessor inlierCounts,
+			final FloatProcessor inlierRatio,
 			final short distance ) throws NotEnoughDataPointsException
 	{
 		/* assemble into typed arrays for quicker access */
@@ -419,8 +423,9 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 		 * this is true here and in opticFlow, i.e. scale should be interleaved (size of array
 		 * becomes concern, use ImgLib2).
 		 */
-		final short[][] xShiftArrays = new short[ shiftVectors.size() / 2 ][];
-		final short[][] yShiftArrays = new short[ xShiftArrays.length ][];
+		final int scaleLevels = shiftVectors.size() / 2;
+		final short[][] xShiftArrays = new short[ scaleLevels ][];
+		final short[][] yShiftArrays = new short[ scaleLevels ][];
 		for ( int i = 0; i < xShiftArrays.length; ++i )
 		{
 			xShiftArrays[ i ] = ( short[] )shiftVectors.getImageArray()[ i << 1 ];
@@ -473,16 +478,16 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 			shiftX.setf( i, bestX );
 			shiftY.setf( i, bestY );
 
-			inlierCounts.set( i, bestCount );
+			inlierRatio.setf( i, ( float )bestCount / scaleLevels );
 
-			if ( i / inlierCounts.getWidth() * inlierCounts.getWidth() == i )
-				IJ.log( "row " + i / inlierCounts.getWidth() );
+//			if ( i / inlierRatio.getWidth() * inlierRatio.getWidth() == i )
+//				IJ.log( "row " + i / inlierRatio.getWidth() );
 
 		}
 	}
 
 
-	private static final FloatProcessor materialize( final RandomAccessibleInterval< FloatType > source )
+	public static final FloatProcessor materialize( final RandomAccessibleInterval< FloatType > source )
 	{
 		final FloatProcessor target = new FloatProcessor( ( int )source.dimension( 0 ), ( int )source.dimension( 1 ) );
 		copy(
@@ -495,7 +500,7 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 	}
 
 
-	private static final < T extends Type< T > > void copy( final RandomAccessible< ? extends T > source, final RandomAccessibleInterval< T > target )
+	public static final < T extends Type< T > > void copy( final RandomAccessible< ? extends T > source, final RandomAccessibleInterval< T > target )
 	{
 		Views.flatIterable( Views.interval( Views.pair( source, target ), target ) ).forEach(
 				pair -> pair.getB().set( pair.getA() ) );
@@ -533,7 +538,7 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 	}
 
 
-	private static final DeformationFieldTransform< DoubleType > createDeformationFieldTransform(
+	public static final DeformationFieldTransform< DoubleType > createDeformationFieldTransform(
 			final FloatProcessor shiftX,
 			final FloatProcessor shiftY,
 			final InterpolatorFactory< DoubleType, RandomAccessible< DoubleType > > interpolatorFactory )
@@ -700,6 +705,262 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 		}
 	}
 
+	public static final Pair< PositionFieldTransform< DoubleType >, FloatProcessor > scaleSpaceOpticFlow(
+			final FloatProcessor ip1,
+			final FloatProcessor ip2,
+			final short radius,
+			final double sigma,
+			final int numIterations)
+	{
+		/* create background mask */
+		final ByteProcessor backgroundMask = new ByteProcessor( ip1.getWidth(), ip1.getHeight() );
+		final byte[] backgroundMaskPixels = ( byte[] )backgroundMask.getPixels();
+		final float[] ip1Pixels = ( float[] )ip1.getPixels();
+		final float[] ip2Pixels = ( float[] )ip2.getPixels();
+		for ( int i = 0; i < backgroundMaskPixels.length; ++i )
+			if ( !( ip1Pixels[ i ] == 0 || ip2Pixels[ i ] == 0 ) )
+				backgroundMaskPixels[ i ] = 1;
+
+		/* initialize composed weights */
+		FloatProcessor weights = null;
+
+		/* initialize position field with identity */
+		RealRandomAccessible< DoubleType > xPositions = new RealPositionRealRandomAccessible( 2, 0 );
+		RealRandomAccessible< DoubleType > yPositions = new RealPositionRealRandomAccessible( 2, 1 );
+
+		/* filters to mask saturated pixels with noise */
+		final ValueToNoise filter1 = new ValueToNoise( 0, 0, 255 );
+		final ValueToNoise filter2 = new ValueToNoise( 255, 0, 255 );
+
+		FloatProcessor ip1Filtered = filter1.process( ip1 ).convertToFloatProcessor();
+		ip1Filtered = filter2.process( ip1Filtered ).convertToFloatProcessor();
+
+		/* repeat numIteration times for each scale */
+		for ( int j = 0; j < numIterations ; ++j )
+		{
+			@SuppressWarnings( "unchecked" )
+			FloatProcessor ip2Transformed = materialize(
+					createTransformedInterval(
+							ip2,
+							new FinalInterval( ip2.getWidth(), ip2.getHeight() ),
+							new PositionFieldTransform<>(
+									( RealRandomAccessible< DoubleType >[] )new RealRandomAccessible[]{
+										xPositions,
+										yPositions } ) ) );
+
+			ip2Transformed = filter1.process( ip2Transformed ).convertToFloatProcessor();
+			ip2Transformed = filter2.process( ip2Transformed ).convertToFloatProcessor();
+
+			final ImageStack seqR = new ImageStack( ip1Filtered.getWidth(), ip1Filtered.getHeight() );
+			final ImageStack seqOpticFlow = new ImageStack( ip1Filtered.getWidth(), ip1Filtered.getHeight() );
+			final ImageStack seqFlowVectors = new ImageStack( ip1Filtered.getWidth(), ip1Filtered.getHeight() );
+
+			opticFlow(
+					ip1Filtered,
+					ip2Transformed,
+					radius,
+					seqR,
+					seqFlowVectors,
+					seqOpticFlow,
+					1.5 );
+
+			final FloatProcessor shiftXFloat = new FloatProcessor( ip1Filtered.getWidth(), ip1Filtered.getHeight() );
+			final FloatProcessor shiftYFloat = new FloatProcessor( ip1Filtered.getWidth(), ip1Filtered.getHeight() );
+			weights = new FloatProcessor( ip1Filtered.getWidth(), ip1Filtered.getHeight() );
+			try
+			{
+				filterOpticFlowScaleSpace(
+						seqFlowVectors,
+						shiftXFloat,
+						shiftYFloat,
+						weights,
+						radius );
+			}
+			catch ( final NotEnoughDataPointsException e )
+			{
+				e.printStackTrace();
+			}
+
+			/* weight flow vectors by mask * max_R and Gaussian blur */
+			weights.copyBits( backgroundMask, 0, 0, Blitter.MULTIPLY );
+			shiftXFloat.copyBits( weights, 0, 0, Blitter.MULTIPLY );
+			shiftYFloat.copyBits( weights, 0, 0, Blitter.MULTIPLY );
+
+			new GaussianBlur().blurGaussian( shiftXFloat, sigma );
+			new GaussianBlur().blurGaussian( shiftYFloat, sigma );
+			new GaussianBlur().blurGaussian( weights, sigma );
+
+			final FloatProcessor divisionWeights = ( FloatProcessor )weights.duplicate();
+
+			final float[] divisionWeightsPixels = ( float[] )divisionWeights.getPixels();
+			for ( int o = 0; o < divisionWeightsPixels.length; ++o )
+				if ( divisionWeightsPixels[ o ] == 0 )
+					divisionWeightsPixels[ o ] = 1;
+
+			shiftXFloat.copyBits( divisionWeights, 0, 0, Blitter.DIVIDE );
+			shiftYFloat.copyBits( divisionWeights, 0, 0, Blitter.DIVIDE );
+
+			/* append deformation field to existing transformation */
+			final DeformationFieldTransform< DoubleType > deformationField = createDeformationFieldTransform(
+					shiftXFloat,
+					shiftYFloat );
+
+			xPositions = new RealTransformRandomAccessible<>(
+					xPositions,
+					deformationField );
+			yPositions = new RealTransformRandomAccessible<>(
+					yPositions,
+					deformationField );
+		}
+
+		@SuppressWarnings( "unchecked" )
+		final PositionFieldTransform< DoubleType > transform = new PositionFieldTransform<>(
+				new RealRandomAccessible[]{
+						xPositions,
+						yPositions } );
+
+		return new ValuePair< PositionFieldTransform< DoubleType >, FloatProcessor >( transform, weights );
+	}
+
+
+	public static final Pair< PositionFieldTransform< DoubleType >, FloatProcessor > exec(
+			final FloatProcessor ip1,
+			final FloatProcessor ip2,
+			final int radius )
+	{
+		/* create background mask */
+		final ByteProcessor backgroundMask = new ByteProcessor( ip1.getWidth(), ip1.getHeight() );
+		final byte[] backgroundMaskPixels = ( byte[] )backgroundMask.getPixels();
+		final float[] ip1Pixels = ( float[] )ip1.getPixels();
+		final float[] ip2Pixels = ( float[] )ip2.getPixels();
+		for ( int i = 0; i < backgroundMaskPixels.length; ++i )
+			if ( !( ip1Pixels[ i ] == 0 || ip2Pixels[ i ] == 0 ) )
+				backgroundMaskPixels[ i ] = 1;
+
+		/* initialize composed weights */
+		FloatProcessor weights = null;
+
+		/* calculate scale levels */
+		final double scaleFactor = 2;
+		int nScales = 1;
+		for ( double d = radius; d > scaleFactor; d /= scaleFactor )
+			++nScales;
+
+		/* initialize position field with identity */
+		RealRandomAccessible< DoubleType > xPositions = new RealPositionRealRandomAccessible( 2, 0 );
+		RealRandomAccessible< DoubleType > yPositions = new RealPositionRealRandomAccessible( 2, 1 );
+
+		/* filters to mask saturated pixels with noise */
+		final ValueToNoise filter1 = new ValueToNoise( 0, 0, 255 );
+		final ValueToNoise filter2 = new ValueToNoise( 255, 0, 255 );
+
+		/* loop over scales */
+		for ( int i = 0; i < nScales; ++i )
+		{
+			final double scale = 1.0 / Util.pow( scaleFactor, nScales - 1 - i );
+			FloatProcessor ip1Scaled = Filter.createDownsampled( ip1, scale, 0.5f, 0.5f );
+			ip1Scaled = filter1.process( ip1Scaled ).convertToFloatProcessor();
+			ip1Scaled = filter2.process( ip1Scaled ).convertToFloatProcessor();
+			final FloatProcessor backgroundMaskScaled = Filter.createDownsampled( backgroundMask.convertToFloatProcessor(), scale, 0.5f, 0.5f );
+
+			/* repeat three times for each scale */
+			for ( int j = 0; j < 3; ++j )
+			{
+				@SuppressWarnings( "unchecked" )
+				final FloatProcessor ip2Transformed = materialize(
+						createTransformedInterval(
+								ip2,
+								new FinalInterval( ip2.getWidth(), ip2.getHeight() ),
+								new PositionFieldTransform<>(
+										( RealRandomAccessible< DoubleType >[] )new RealRandomAccessible[]{
+											xPositions,
+											yPositions } ) ) );
+				FloatProcessor ip2Scaled = Filter.createDownsampled(
+						ip2Transformed,
+						scale,
+						0.5f,
+						0.5f );
+
+				ip2Scaled = filter1.process( ip2Scaled ).convertToFloatProcessor();
+				ip2Scaled = filter2.process( ip2Scaled ).convertToFloatProcessor();
+
+				final ImageStack seqR = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final ImageStack seqOpticFlow = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final ImageStack seqFlowVectors = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+
+				final short distance = ( short )Math.ceil( scaleFactor * 2 );
+
+				opticFlow(
+						ip1Scaled,
+						ip2Scaled,
+						distance,
+						seqR,
+						seqFlowVectors,
+						seqOpticFlow,
+						1.5 );
+
+				final FloatProcessor shiftXFloat = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final FloatProcessor shiftYFloat = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				weights = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				try
+				{
+					filterOpticFlowScaleSpace(
+							seqFlowVectors,
+							shiftXFloat,
+							shiftYFloat,
+							weights,
+							distance );
+				}
+				catch ( final NotEnoughDataPointsException e )
+				{
+					e.printStackTrace();
+				}
+
+				/* weight flow vectors by mask * max_R and Gaussian blur */
+				weights.copyBits( backgroundMaskScaled, 0, 0, Blitter.MULTIPLY );
+				shiftXFloat.copyBits( weights, 0, 0, Blitter.MULTIPLY );
+				shiftYFloat.copyBits( weights, 0, 0, Blitter.MULTIPLY );
+
+				new GaussianBlur().blurGaussian( shiftXFloat, 4 * scaleFactor );
+				new GaussianBlur().blurGaussian( shiftYFloat, 4 * scaleFactor );
+				new GaussianBlur().blurGaussian( weights, 4 * scaleFactor );
+
+				final FloatProcessor divisionWeights = ( FloatProcessor )weights.duplicate();
+
+				final float[] divisionWeightsPixels = ( float[] )divisionWeights.getPixels();
+				for ( int o = 0; o < divisionWeightsPixels.length; ++o )
+					if ( divisionWeightsPixels[ o ] == 0 )
+						divisionWeightsPixels[ o ] = 1;
+
+				shiftXFloat.copyBits( divisionWeights, 0, 0, Blitter.DIVIDE );
+				shiftYFloat.copyBits( divisionWeights, 0, 0, Blitter.DIVIDE );
+
+				/* append deformation field to existing transformation */
+				final RealTransformSequence transformSequence = new RealTransformSequence();
+				transformSequence.add( new Scale2D( scale, scale ) );
+				transformSequence.add( createDeformationFieldTransform(
+						shiftXFloat,
+						shiftYFloat ) );
+				transformSequence.add( new Scale2D( 1.0 / scale, 1.0 / scale ) );
+
+				xPositions = new RealTransformRandomAccessible<>(
+						xPositions,
+						transformSequence );
+				yPositions = new RealTransformRandomAccessible<>(
+						yPositions,
+						transformSequence );
+			}
+		}
+
+		@SuppressWarnings( "unchecked" )
+		final PositionFieldTransform< DoubleType > transform = new PositionFieldTransform<>(
+				new RealRandomAccessible[]{
+						xPositions,
+						yPositions } );
+
+		return new ValuePair< PositionFieldTransform< DoubleType >, FloatProcessor >( transform, weights );
+	}
+
 
 
 	@Override
@@ -736,6 +997,17 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 		final FloatProcessor ip1 = imp.getStack().getProcessor( 1 ).convertToFloatProcessor();
 		final FloatProcessor ip2 = imp.getStack().getProcessor( 2 ).convertToFloatProcessor();
 
+		/* create background mask */
+		final ByteProcessor backgroundMask = new ByteProcessor( ip1.getWidth(), ip1.getHeight() );
+		final byte[] backgroundMaskPixels = ( byte[] )backgroundMask.getPixels();
+		final float[] ip1Pixels = ( float[] )ip1.getPixels();
+		final float[] ip2Pixels = ( float[] )ip2.getPixels();
+		for ( int i = 0; i < backgroundMaskPixels.length; ++i )
+			if ( !( ip1Pixels[ i ] == 0 || ip2Pixels[ i ] == 0 ) )
+				backgroundMaskPixels[ i ] = 1;
+
+		new ImagePlus( "backgroundMask", backgroundMask ).show();
+
 		final double scaleFactor = 2;
 
 		int nScales = 1;
@@ -757,94 +1029,116 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 		{
 			final double scale = 1.0 / Util.pow( scaleFactor, nScales - 1 - i );
 			FloatProcessor ip1Scaled = Filter.createDownsampled( ip1, scale, 0.5f, 0.5f );
-			@SuppressWarnings( "unchecked" )
-			final FloatProcessor ip2Transformed = materialize(
-					createTransformedInterval(
-							ip2,
-							new FinalInterval( ip2.getWidth(), ip2.getHeight() ),
-							new PositionFieldTransform<>(
-									( RealRandomAccessible< DoubleType >[] )new RealRandomAccessible[]{
-										xPositions,
-										yPositions } ) ) );
-			FloatProcessor ip2Scaled = Filter.createDownsampled(
-					ip2Transformed,
-					scale,
-					0.5f,
-					0.5f );
-
 			ip1Scaled = filter1.process( ip1Scaled ).convertToFloatProcessor();
 			ip1Scaled = filter2.process( ip1Scaled ).convertToFloatProcessor();
-			ip2Scaled = filter1.process( ip2Scaled ).convertToFloatProcessor();
-			ip2Scaled = filter2.process( ip2Scaled ).convertToFloatProcessor();
+			final FloatProcessor backgroundMaskScaled = Filter.createDownsampled( backgroundMask.convertToFloatProcessor(), scale, 0.5f, 0.5f );
 
-			ip2Stack.addSlice( "" + i, ip2Transformed );
-			impIp2Stack.setStack( ip2Stack );
-			impIp2Stack.updateAndDraw();
-
-//			new ImagePlus( "ip2 scaled and transformed" , ip2Scaled ).show();
-			final ImageStack seqR = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-			final ImageStack seqOpticFlow = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-			final ImageStack seqFlowVectors = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-
-			final short distance = ( short )Math.ceil( scaleFactor * 2 );
-
-			opticFlow(
-					ip1Scaled,
-					ip2Scaled,
-					distance,
-					seqR,
-					seqFlowVectors,
-					seqOpticFlow,
-					1.5 );
-
-			final FloatProcessor shiftXFloat = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-			final FloatProcessor shiftYFloat = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-			final ShortProcessor inlierCounts = new ShortProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-			final ColorProcessor filteredOpticFlow = new ColorProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
-			try
+			for ( int j = 0; j < 3; ++j )
 			{
-				filterOpticFlowScaleSpace(
+				@SuppressWarnings( "unchecked" )
+				final FloatProcessor ip2Transformed = materialize(
+						createTransformedInterval(
+								ip2,
+								new FinalInterval( ip2.getWidth(), ip2.getHeight() ),
+								new PositionFieldTransform<>(
+										( RealRandomAccessible< DoubleType >[] )new RealRandomAccessible[]{
+											xPositions,
+											yPositions } ) ) );
+				FloatProcessor ip2Scaled = Filter.createDownsampled(
+						ip2Transformed,
+						scale,
+						0.5f,
+						0.5f );
+
+				ip2Scaled = filter1.process( ip2Scaled ).convertToFloatProcessor();
+				ip2Scaled = filter2.process( ip2Scaled ).convertToFloatProcessor();
+
+				ip2Stack.addSlice( "" + i, ip2Transformed );
+				impIp2Stack.setStack( ip2Stack );
+				impIp2Stack.updateAndDraw();
+
+
+
+	//			new ImagePlus( "ip2 scaled and transformed" , ip2Scaled ).show();
+				final ImageStack seqR = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final ImageStack seqOpticFlow = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final ImageStack seqFlowVectors = new ImageStack( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+
+				final short distance = ( short )Math.ceil( scaleFactor * 2 );
+
+				opticFlow(
+						ip1Scaled,
+						ip2Scaled,
+						distance,
+						seqR,
 						seqFlowVectors,
-						shiftXFloat,
-						shiftYFloat,
-						inlierCounts,
+						seqOpticFlow,
+						1.5 );
+
+				final FloatProcessor shiftXFloat = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final FloatProcessor shiftYFloat = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final FloatProcessor inlierRatio = new FloatProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				final ColorProcessor filteredOpticFlow = new ColorProcessor( ip1Scaled.getWidth(), ip1Scaled.getHeight() );
+				try
+				{
+					filterOpticFlowScaleSpace(
+							seqFlowVectors,
+							shiftXFloat,
+							shiftYFloat,
+							inlierRatio,
+							distance );
+				}
+				catch ( final NotEnoughDataPointsException e )
+				{
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+
+				algebraicToColor(
+						( float[] )shiftXFloat.getPixels(),
+						( float[] )shiftYFloat.getPixels(),
+						( int[] )filteredOpticFlow.getPixels(),
 						distance );
+
+	//			final FloatProcessor shiftXFloat = convertSignedShortToFloat( seqFlowVectors.getProcessor( seqFlowVectors.size() / 2 + 2 ).convertToShortProcessor() );
+	//			final FloatProcessor shiftYFloat = convertSignedShortToFloat( seqFlowVectors.getProcessor( seqFlowVectors.size() / 2 + 2 + 1 ).convertToShortProcessor() );
+
+
+				/* weight flow vectors by max R and Gaussian blur */
+				inlierRatio.copyBits( backgroundMaskScaled, 0, 0, Blitter.MULTIPLY );
+				shiftXFloat.copyBits( inlierRatio, 0, 0, Blitter.MULTIPLY );
+				shiftYFloat.copyBits( inlierRatio, 0, 0, Blitter.MULTIPLY );
+
+				new GaussianBlur().blurGaussian( shiftXFloat, 4 * scaleFactor );
+				new GaussianBlur().blurGaussian( shiftYFloat, 4 * scaleFactor );
+				new GaussianBlur().blurGaussian( inlierRatio, 4 * scaleFactor );
+
+				final float[] inlierRatioPixels = ( float[] )inlierRatio.getPixels();
+				for ( int o = 0; o < inlierRatioPixels.length; ++o )
+					if ( inlierRatioPixels[ o ] == 0 )
+						inlierRatioPixels[ o ] = 1;
+
+				shiftXFloat.copyBits( inlierRatio, 0, 0, Blitter.DIVIDE );
+				shiftYFloat.copyBits( inlierRatio, 0, 0, Blitter.DIVIDE );
+
+				final RealTransformSequence transformSequence = new RealTransformSequence();
+				transformSequence.add( new Scale2D( scale, scale ) );
+				transformSequence.add( createDeformationFieldTransform(
+						shiftXFloat,
+						shiftYFloat ) );
+				transformSequence.add( new Scale2D( 1.0 / scale, 1.0 / scale ) );
+
+				xPositions = new RealTransformRandomAccessible<>(
+						xPositions,
+						transformSequence );
+				yPositions = new RealTransformRandomAccessible<>(
+						yPositions,
+						transformSequence );
+
+				visualizeFlow( imp, seqR, seqOpticFlow, seqFlowVectors, filteredOpticFlow );
+	//			visualizeDeformation( ip2Scaled, seqR, seqOpticFlow, seqFlowVectors );
+	//			filter( ip2Scaled, seqFlowVectors );
 			}
-			catch ( final NotEnoughDataPointsException e )
-			{
-				// TODO Auto-generated catch block
-				e.printStackTrace();
-			}
-
-			algebraicToColor(
-					( float[] )shiftXFloat.getPixels(),
-					( float[] )shiftYFloat.getPixels(),
-					( int[] )filteredOpticFlow.getPixels(),
-					distance );
-
-//			final FloatProcessor shiftXFloat = convertSignedShortToFloat( seqFlowVectors.getProcessor( seqFlowVectors.size() / 2 + 2 ).convertToShortProcessor() );
-//			final FloatProcessor shiftYFloat = convertSignedShortToFloat( seqFlowVectors.getProcessor( seqFlowVectors.size() / 2 + 2 + 1 ).convertToShortProcessor() );
-
-			new GaussianBlur().blurGaussian( shiftXFloat, 4 * scaleFactor );
-			new GaussianBlur().blurGaussian( shiftYFloat, 4 * scaleFactor );
-
-			final RealTransformSequence transformSequence = new RealTransformSequence();
-			transformSequence.add( new Scale2D( scale, scale ) );
-			transformSequence.add( createDeformationFieldTransform(
-					shiftXFloat,
-					shiftYFloat ) );
-			transformSequence.add( new Scale2D( 1.0 / scale, 1.0 / scale ) );
-
-			xPositions = new RealTransformRandomAccessible<>(
-					xPositions,
-					transformSequence );
-			yPositions = new RealTransformRandomAccessible<>(
-					yPositions,
-					transformSequence );
-
-			visualizeFlow( imp, seqR, seqOpticFlow, seqFlowVectors, filteredOpticFlow );
-//			visualizeDeformation( ip2Scaled, seqR, seqOpticFlow, seqFlowVectors );
-//			filter( ip2Scaled, seqFlowVectors );
 		}
 
 		@SuppressWarnings( "unchecked" )
@@ -952,7 +1246,8 @@ public class PMCCScaleSpaceBlockFlow implements PlugIn
 //		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/saalfeldlab/scheffer/26-27/26.3008-27.128.2.affine.tif" );
 //		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/saalfeldlab/scheffer/26-27-2017-03-1.crop.tif" );
 //		final ImagePlus imp = new Opener().openImage( "/home/saalfelds/tmp/dagmar/26-27-affine.tif" );
-		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/home/saalfelds/tmp/dagmar/26-03173.27-00303.rigid.tif" );
+//		final ImagePlus imp = new Opener().openImage( "/groups/saalfeld/home/saalfelds/tmp/dagmar/26-03173.27-00303.rigid.tif" );
+		final ImagePlus imp = new Opener().openImage( "/data/saalfeld/flyem/hot-knife/26-27-dagmar/26-27.tif" );
 		imp.show();
 		new PMCCScaleSpaceBlockFlow().run("");
 		new ImagePlus(
