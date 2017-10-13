@@ -66,8 +66,6 @@ public class RealPositionRealRandomAccessible implements RealRandomAccessible< D
 		{
 			return copy();
 		}
-
-
 	}
 
 	@Override
