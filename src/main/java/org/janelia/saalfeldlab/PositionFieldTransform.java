@@ -34,6 +34,8 @@
 
 package org.janelia.saalfeldlab;
 
+import java.util.Arrays;
+
 import net.imglib2.RealLocalizable;
 import net.imglib2.RealPositionable;
 import net.imglib2.RealRandomAccess;
@@ -49,70 +51,70 @@ import net.imglib2.type.numeric.RealType;
 public class PositionFieldTransform< T extends RealType< T > > implements RealTransform
 {
 	/* one for each dimension */
-	private final RealRandomAccessible< T >[] positions;
 	private final RealRandomAccess< T >[] positionAccesses;
+
+	public PositionFieldTransform( final RealRandomAccess< T >[] positionAccesses )
+	{
+		this.positionAccesses = positionAccesses;
+	}
 
 	@SuppressWarnings( "unchecked" )
 	public PositionFieldTransform( final RealRandomAccessible< T >[] positions )
 	{
-		this.positions = positions;
-		positionAccesses = new RealRandomAccess[ positions.length ];
-		for ( int d = 0; d < positions.length; ++d )
-		{
-			assert( positions[ d ].numDimensions() == positions.length ) : "Dimensions do not match.";
+		assert( Arrays.stream( positions ).allMatch( p -> p.numDimensions() == positions.length ) ) : "Dimensions do not match.";
 
-			positionAccesses[ d ] = positions[ d ].realRandomAccess();
-		}
+		positionAccesses = new RealRandomAccess[ positions.length ];
+		Arrays.setAll( positionAccesses, i -> positions[ i ].realRandomAccess() );
 	}
 
 	@Override
 	public int numSourceDimensions()
 	{
-		return positions.length;
+		return positionAccesses.length;
 	}
 
 	@Override
 	public int numTargetDimensions()
 	{
-		return positions.length;
+		return positionAccesses.length;
 	}
 
 	@Override
 	public void apply( final double[] source, final double[] target )
 	{
-		for ( int d = 0; d < target.length; d++ )
-		{
-			final RealRandomAccess< T > access = positionAccesses[ d ];
-			access.setPosition( source );
-			target[ d ] = access.get().getRealDouble();
-		}
+		for ( int d = 0; d < positionAccesses.length; d++ )
+			positionAccesses[ d ].setPosition( source );
+
+		for ( int d = 0; d < positionAccesses.length; d++ )
+			target[ d ] = positionAccesses[ d ].get().getRealDouble();
 	}
 
 	@Override
 	public void apply( final float[] source, final float[] target )
 	{
-		for ( int d = 0; d < target.length; d++ )
-		{
-			final RealRandomAccess< T > access = positionAccesses[ d ];
-			access.setPosition( source );
-			target[ d ] = ( float )access.get().getRealDouble();
-		}
+		for ( int d = 0; d < positionAccesses.length; d++ )
+			positionAccesses[ d ].setPosition( source );
+
+		for ( int d = 0; d < positionAccesses.length; d++ )
+			target[ d ] = ( float )positionAccesses[ d ].get().getRealDouble();
 	}
 
 	@Override
 	public void apply( final RealLocalizable source, final RealPositionable target )
 	{
-		for ( int d = 0; d < target.numDimensions(); d++ )
-		{
-			final RealRandomAccess< T > access = positionAccesses[ d ];
-			access.setPosition( source );
-			target.setPosition( access.get().getRealDouble(), d );
-		}
+		for ( int d = 0; d < positionAccesses.length; d++ )
+			positionAccesses[ d ].setPosition( source );
+
+		for ( int d = 0; d < positionAccesses.length; d++ )
+			target.setPosition( positionAccesses[ d ].get().getRealDouble(), d );
 	}
 
 	@Override
 	public RealTransform copy()
 	{
-		return new PositionFieldTransform< T >( positions );
+		@SuppressWarnings( "unchecked" )
+		final RealRandomAccess< T >[] accessCopies = ( RealRandomAccess< T >[] )new RealRandomAccess[ positionAccesses.length ];
+		Arrays.setAll( accessCopies, i -> positionAccesses[ i ].copyRealRandomAccess() );
+		return new PositionFieldTransform< T >( accessCopies );
 	}
 }
