@@ -40,19 +40,23 @@ import net.imglib2.RealPositionable;
 import net.imglib2.realtransform.RealTransform;
 
 /**
- * A {@link RealTransform} that interpolates between two RealTransforms.
+ * A {@link RealTransform} that linearly interpolates between two
+ * {@link RealTransform RealTransforms}.
  *
- * @author Stephan Saalfeld &lt;saalfelds@janelia.hhmi.org&gt;
+ * The lambda parameter is the weight that applies to transform A, i.e. the
+ * interpolated transform is (lambda * a) + (1-lambda * b).
+ *
+ * @author Stephan Saalfeld
  */
 public class InterpolatedRealTransform implements RealTransform
 {
 	private final RealTransform a;
 	private final RealTransform b;
-	private final double lambda;
+	private double lambda;
 	private final double[] targetPositionA;
 	private final double[] targetPositionB;
-	private final RealPositionable targetPositionableA;
-	private final RealPositionable targetPositionableB;
+	private final RealPoint targetPositionableA;
+	private final RealPoint targetPositionableB;
 
 	public InterpolatedRealTransform(
 			final RealTransform a,
@@ -85,6 +89,11 @@ public class InterpolatedRealTransform implements RealTransform
 		return targetPositionA.length;
 	}
 
+	public void setLambda( final double lambda )
+	{
+		this.lambda = lambda;
+	}
+
 	@Override
 	public void apply( final double[] source, final double[] target )
 	{
@@ -107,7 +116,7 @@ public class InterpolatedRealTransform implements RealTransform
 		a.apply( source, targetPositionableA );
 		b.apply( source, targetPositionableB );
 
-		for ( int d = 0; d < target.numDimensions(); d++ )
+		for ( int d = 0; d < numTargetDimensions(); d++ )
 			target.setPosition( ( targetPositionA[ d ] - targetPositionB[ d ] ) * lambda + targetPositionB[ d ], d );
 	}
 
