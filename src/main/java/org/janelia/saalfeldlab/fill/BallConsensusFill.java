@@ -34,6 +34,8 @@
 
 package org.janelia.saalfeldlab.fill;
 
+import java.util.function.Consumer;
+
 import gnu.trove.list.TLongList;
 import gnu.trove.list.array.TLongArrayList;
 import net.imglib2.Cursor;
@@ -56,7 +58,7 @@ import net.imglib2.view.composite.RealComposite;
  *
  * @author Stephan Saalfeld
  */
-public class BallConsensusFill<T extends RealType<T>, U extends IntegerType<U>, B extends BooleanType<B>> {
+public class BallConsensusFill<T extends RealType<T>, U extends IntegerType<U>, B extends BooleanType<B>> implements Consumer<Localizable> {
 
 	// int or long? current TLongList cannot store more than Integer.MAX_VALUE
 	private static final int CLEANUP_THRESHOLD = (int)1e5;
@@ -171,7 +173,8 @@ public class BallConsensusFill<T extends RealType<T>, U extends IntegerType<U>, 
 	 * @param <U>
 	 *            fill label type
 	 */
-	public void fill(final Localizable seed) {
+	@Override
+	public void accept(final Localizable seed) {
 
 		final int n = source.numDimensions();
 

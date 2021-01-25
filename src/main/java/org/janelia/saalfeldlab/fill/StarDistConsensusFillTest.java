@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import javax.swing.UIManager;
@@ -12,7 +13,6 @@ import javax.swing.UnsupportedLookAndFeelException;
 
 import org.janelia.saalfeldlab.n5.N5Reader;
 import org.janelia.saalfeldlab.n5.imglib2.N5Utils;
-import org.janelia.saalfeldlab.util.Caches;
 import org.janelia.saalfeldlab.util.N5Factory;
 import org.scijava.ui.behaviour.io.InputTriggerConfig;
 import org.scijava.ui.behaviour.util.Actions;
@@ -21,11 +21,15 @@ import org.scijava.ui.behaviour.util.Behaviours;
 import com.formdev.flatlaf.FlatDarkLaf;
 
 import bdv.util.BdvFunctions;
+import bdv.util.BdvHandle;
+import bdv.util.BdvOptions;
 import bdv.util.BdvStackSource;
 import bdv.util.volatiles.VolatileViews;
+import net.imglib2.Cursor;
 import net.imglib2.Interval;
+import net.imglib2.RandomAccessible;
 import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.algorithm.neighborhood.DiamondShape;
+import net.imglib2.algorithm.region.stardist.StarDists;
 import net.imglib2.cache.img.DiskCachedCellImgFactory;
 import net.imglib2.cache.img.DiskCachedCellImgOptions;
 import net.imglib2.converter.Converters;
@@ -35,20 +39,31 @@ import net.imglib2.type.logic.BitType;
 import net.imglib2.type.numeric.ARGBType;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.UnsignedIntType;
-import net.imglib2.type.numeric.real.DoubleType;
+import net.imglib2.util.LinAlgHelpers;
+import net.imglib2.view.ExtendedRandomAccessibleInterval;
 import net.imglib2.view.Views;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-@Command(name = "ball-fill-test")
-public class BallConsensusFillTest implements Callable<Void> {
+@Command(name = "stardist-fill-test")
+public class StarDistConsensusFillTest implements Callable<Void> {
 
-	@Option(names = {"-i", "--n5url"}, required = true, description = "N5 URL, e.g. '/home/saalfeld/tmp/jrc_hela-2.n5'")
+	@Option(names = {"-i", "--n5url"}, required = true, description = "N5 URL, e.g. '/home/saalfeld/projects/stardist/3d_cell_segmentaion/stardist_torch.hdf5'")
 	private String n5Url = null;
 
-	@Option(names = {"-d", "--n5dataset"}, required = true, description = "N5 dataset, e.g. '/labels/er_pred/s0'")
-	private String n5Dataset = null;
+	@Option(names = {"-j", "--n5image"}, required = true, description = "N5 image dataset, e.g. '/valid_img_0'")
+	private String n5Image = null;
+
+	@Option(names = {"-d", "--n5dists"}, required = true, description = "N5 stardists dataset, e.g. '/dist_out_0'")
+	private String n5Dists = null;
+
+	@Option(names = {"-r", "--n5rays"}, required = true, description = "N5 rays dataset, e.g. '/verts'")
+	private String n5Rays = null;
+
+	@Option(names = {"-s", "--distScale"}, required = false, description = "StarDist scale, e.g. 1.0")
+	private double distScale = 1.0;
+
 
 	/**
 	 * Start the tool. We ignore the exit code returned by
@@ -63,7 +78,7 @@ public class BallConsensusFillTest implements Callable<Void> {
 			UIManager.setLookAndFeel(new FlatDarkLaf());
 		} catch (final UnsupportedLookAndFeelException e) {}
 
-		new CommandLine(new BallConsensusFillTest()).execute(args);
+		new CommandLine(new StarDistConsensusFillTest()).execute(args);
 	}
 
 	/**
@@ -83,9 +98,19 @@ public class BallConsensusFillTest implements Callable<Void> {
 		return null;
 	}
 
-	private static double atanh(final double x) {
+	private static <T extends NativeType<T> & RealType<T>> double[][] rays(
+			final N5Reader n5,
+			final String dataset) throws IOException {
 
-		return 0.5 * Math.log((1.0 + x) / (1.0 - x));
+		final RandomAccessibleInterval<T> img = N5Utils.open(n5, dataset);
+		final double[][] rays = new double[(int)img.dimension(1)][(int)img.dimension(0)];
+		final Cursor<T> cursor = Views.flatIterable(img).cursor();
+		while (cursor.hasNext()) {
+			final T t = cursor.next();
+			rays[cursor.getIntPosition(1)][rays[0].length - 1 - cursor.getIntPosition(0)] = t.getRealDouble();
+		}
+
+		return rays;
 	}
 
 	private static final RandomAccessibleInterval<UnsignedIntType> createCounts(final Interval interval) {
@@ -108,6 +133,9 @@ public class BallConsensusFillTest implements Callable<Void> {
 	private static final RandomAccessibleInterval<BitType> createStates(final Interval interval) {
 
 		final long[] dimensions = new long[interval.numDimensions() + 1];
+		interval.dimensions(dimensions);
+		dimensions[dimensions.length - 1] = 2;
+
 		final int[] cellDimensions = new int[dimensions.length];
 		Arrays.fill(cellDimensions, 64);
 		cellDimensions[cellDimensions.length - 1] = 2;
@@ -129,82 +157,63 @@ public class BallConsensusFillTest implements Callable<Void> {
 	 * @param <T>
 	 * @throws IOException
 	 */
-	private final <T extends NativeType<T> & RealType<T>> void run() throws IOException {
+	private final <
+			T extends NativeType<T> & RealType<T>,
+			P extends NativeType<P> & RealType<P>> void run() throws IOException {
 
 		/* make an N5 reader */
 		final N5Reader n5 = N5Factory.openReader(n5Url);
 
 		System.out.println(n5);
 
-		/* open the dataset, use volatile access */
-		final RandomAccessibleInterval<T> tanhDistances = N5Utils.openVolatile(n5, n5Dataset);
+		final BdvOptions options = BdvOptions.options().screenScales(new double[]{0.5});
 
-		/* show with BDV, wrapped as volatile */
+		/* open and show image */
+		final RandomAccessibleInterval<P> img = N5Utils.openVolatile(n5, n5Image);
 		final BdvStackSource<?> bdv = BdvFunctions.show(
-				VolatileViews.wrapAsVolatile(tanhDistances),
-				n5Dataset);
-		bdv.setColor(new ARGBType(0xffff00ff));
-		bdv.setDisplayRange(0, 255);
+				VolatileViews.wrapAsVolatile(img),
+				n5Image,
+				options);
+		bdv.setColor(new ARGBType(0xffffffff));
+		bdv.setDisplayRange(0, 2);
 
+		/* open rays */
+		final double[][] rays = rays(n5, n5Rays);
+		for (final double[] ray : rays)
+			System.out.println(LinAlgHelpers.length(ray));
 
-		/* convert to linear distances in px */
-		final RandomAccessibleInterval<DoubleType> distances = Converters.convert(
-				tanhDistances,
-				(a, b) -> b.setReal(
-						Math.min(4, 0.25 * 50.0 * atanh((Math.max(20, Math.min(234, a.getRealDouble())) - 127.0) / 128))),
-				new DoubleType());
+		/* open stardists */
+		RandomAccessibleInterval<T> distsFlat = N5Utils.open(n5, n5Dists);
+		distsFlat = Converters.convert(
+				distsFlat,
+				(a, b) -> b.setReal(Math.max(0, a.getRealDouble() * distScale)),
+				distsFlat.randomAccess().get().createVariable());
+		final ExtendedRandomAccessibleInterval<T, RandomAccessibleInterval<T>> distsFlatExtended = Views.extendZero(distsFlat);
+		RandomAccessible<T> distsFlatPermuted = distsFlatExtended;
+		for (int d = distsFlat.numDimensions() - 1; d > 0; --d)
+			distsFlatPermuted = Views.permute(distsFlatPermuted, 0, d);
 
-		final RandomAccessibleInterval<DoubleType> cachedDistances = Caches.cache(distances, new int[] {64, 64, 64});
-
-//		bdv = BdvFunctions.show(
-//				VolatileViews.wrapAsVolatile(
-//						Caches.cache(distances, 64, 64, 64)),
-//				n5Dataset + " linear distances",
-//				BdvOptions.options().addTo(bdv));
-//		bdv.setColor(new ARGBType(0xffffffff));
-//		bdv.setDisplayRange(-200, 200);
-
-		/* find max */
-//		final T max = tanhDistances.randomAccess().get().createVariable();
-//		final Point seed = new Point(tanhDistances.numDimensions());
-//		final Cursor<T> c = Views.iterable(tanhDistances).cursor();
-//		while (c.hasNext()) {
-//			final T t = c.next();
-//			if (t.compareTo(max) > 0) {
-//				max.set(t);
-//				seed.setPosition(c);
-//				System.out.println(t.getRealDouble() + " @ " + Util.printCoordinates(c));
-//			}
-//		}
-//		System.out.println("Seed " + max.getRealDouble() + " @ " + Util.printCoordinates(seed));
-
-
-//		bdv = BdvFunctions.show(
-//				Views.hyperSlice(stateFlat, 3, 0),
-//				n5Dataset + " visited",
-//				BdvOptions.options().addTo(bdv));
-//		bdv.setColor(new ARGBType(0xffffffff));
-//		bdv.setDisplayRange(0, 1);
-
-		/* fill worker */
-		final ExecutorService exec = Executors.newCachedThreadPool();
+		final RandomAccessible<T> finalDistsFlatPermuted = distsFlatPermuted;
 
 		/* add fill behavior */
+		final ExecutorService exec = Executors.newCachedThreadPool();
 		final Behaviours behaviours = new Behaviours(new InputTriggerConfig());
 		behaviours.install(bdv.getBdvHandle().getTriggerbindings(), "fill");
 		behaviours.behaviour(
 				new SeedBehavior(
 						bdv.getBdvHandle(),
 						new Translation3D(),
-						() -> createCounts(tanhDistances),
-						() -> createStates(tanhDistances),
-						(counts, state) -> new BallConsensusFill<>(
-								Views.extendZero(cachedDistances),
-								counts,
-								state,
-								new DiamondShape(1),
-								0.5,
-								50),
+						() -> createCounts(img),
+						() -> createStates(img),
+						(counts, state) -> new StarDistConsensusFill<>(
+								new StarDists<>(
+										rays,
+										finalDistsFlatPermuted,
+										Views.pair(counts, state),
+										20),
+								0.75,
+								1,
+								10),
 						exec),
 				"fill",
 				"SPACE button1");
@@ -213,15 +222,17 @@ public class BallConsensusFillTest implements Callable<Void> {
 		final Actions actions = new Actions(new InputTriggerConfig());
 		actions.install(bdv.getBdvHandle().getKeybindings(), "fill");
 
+		final BdvHandle bdvHandle = bdv.getBdvHandle();
+
 		actions.runnableAction(() -> {
 
 					try {
 						final ExecutorService saveExec = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
-						System.out.println( "Saving counts to '" + n5Dataset + "-ball-mask'...");
+						System.out.println( "Saving counts to '" + n5Image + "-stardist-mask'...");
 //						N5Utils.save(
-//								counts,
+//								bdv,
 //								N5Factory.openWriter(n5Url),
-//								n5Dataset + "-ball-mask",
+//								n5Image + "-stardist-mask",
 //								new int[] {128, 128, 128},
 //								new GzipCompression(),
 //								saveExec);
@@ -241,9 +252,13 @@ public class BallConsensusFillTest implements Callable<Void> {
 		new Thread(() -> {
 
 				while (true) {
-					finalBdv.getBdvHandle().getViewerPanel().requestRepaint();
+					final int activeThreads = exec instanceof ThreadPoolExecutor ? ((ThreadPoolExecutor)exec).getActiveCount() : 1;
+					final int sleepTime = activeThreads > 0 ? 1000/10 : 1000/5;
+					if (activeThreads > 0)
+						finalBdv.getBdvHandle().getViewerPanel().requestRepaint();
+
 					try {
-						Thread.sleep(1000/10);
+						Thread.sleep(sleepTime);
 					} catch (final InterruptedException e) {
 						break;
 					}

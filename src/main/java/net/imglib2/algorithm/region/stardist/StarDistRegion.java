@@ -53,7 +53,7 @@ import net.imglib2.view.composite.Composite;
  *
  * @author Stephan Saalfeld
  */
-public class StarDist<T> extends Point implements IterableInterval<T> {
+public class StarDistRegion<T> extends Point implements IterableInterval<T> {
 
 	public class Cursor implements net.imglib2.Cursor<T> {
 
@@ -166,7 +166,7 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 	protected final double[] a;
 	protected final double[] b;
 
-	public StarDist(
+	public StarDistRegion(
 			final RandomAccessible<T> source,
 			final long[] position,
 			final double[][] rays,
@@ -184,7 +184,7 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 		b = new double[numDimensions];
 	}
 
-	public StarDist(
+	public StarDistRegion(
 			final RandomAccessible< T > source,
 			final Localizable position,
 			final double[][] rays,
@@ -195,19 +195,9 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 	}
 
 	@Override
-	public long size() {
-
-		throw new UnsupportedOperationException(
-				"It is certainly possible to estimate the number elements "
-				+ "in a StarDist but I didn't see the point implementing "
-				+ "this.  At least the naive way is equivalent to iterating "
-				+ "it fully which defeats the purpose.");
-	}
-
-	@Override
 	public T firstElement() {
 
-		final StarDist<T>.Cursor cursor = new Cursor();
+		final StarDistRegion<T>.Cursor cursor = new Cursor();
 		cursor.fwd();
 		return cursor.get();
 	}
@@ -216,6 +206,28 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 	public Object iterationOrder() {
 
 		return this; // iteration order is only compatible with ourselves
+	}
+
+	@Override
+	public int numDimensions() {
+
+		return numDimensions;
+	}
+
+	@Override
+	public Iterator<T> iterator() {
+
+		return cursor();
+	}
+
+	@Override
+	public long size() {
+
+		throw new UnsupportedOperationException(
+				"It is certainly possible to estimate the number elements "
+				+ "in a StarDist but I didn't see the point implementing "
+				+ "this.  At least the naive way is equivalent to iterating "
+				+ "it fully which defeats the purpose.");
 	}
 
 	@Override
@@ -270,18 +282,6 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 				"It is certainly possible to estimate the bounds by looping"
 				+ "over all rays of the StarDist but I didn't see the point"
 				+ "implementing it.");
-	}
-
-	@Override
-	public int numDimensions() {
-
-		return numDimensions;
-	}
-
-	@Override
-	public Iterator<T> iterator() {
-
-		return cursor();
 	}
 
 	@Override
@@ -379,7 +379,7 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 			setDist(composite.get(i).getRealDouble(), i);
 	}
 
-	public double absoluteDiff(final StarDist<?> other) {
+	public double absoluteDiff(final StarDistRegion<?> other) {
 
 		final double[] otherDists = other.dists;
 		double sum = 0;
@@ -389,13 +389,13 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 		return sum;
 	}
 
-	public double avgAbsoluteDiff(final StarDist<?> other) {
+	public double avgAbsoluteDiff(final StarDistRegion<?> other) {
 
 		final double diff = absoluteDiff(other);
 		return diff / dists.length;
 	}
 
-	public double squareDiff(final StarDist<?> other) {
+	public double squareDiff(final StarDistRegion<?> other) {
 
 		final double[] otherDists = other.dists;
 		double sum = 0;
@@ -408,7 +408,7 @@ public class StarDist<T> extends Point implements IterableInterval<T> {
 	}
 
 	public double rayConsensus(
-			final StarDist<?> other,
+			final StarDistRegion<?> other,
 			final int i) {
 
 		localize(a);
